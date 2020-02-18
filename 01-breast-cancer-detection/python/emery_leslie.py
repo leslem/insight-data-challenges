@@ -27,6 +27,15 @@ from sklearn.feature_selection import RFECV
 from sklearn.linear_model import LogisticRegression, LogisticRegressionCV
 from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score
+# -
+
+# +
+import plotly.io as pio
+print(pio.renderers.default)
+pio.renderers.default = 'png'
+print(pio.renderers.default)
+# -
+
 
 # ### Data preparation
 
@@ -220,7 +229,7 @@ print('Tuned logistic regression model confusion matrix:')
 print(confusion_matrix(y_test, best_classifier.predict(X_test)))
 # -
 
-# In comparison, the naive model has a much higher false negative rate, which would be the worse kind of error to make for cancer diagnosis.
+# In comparison, the naive model has a much higher false negative rate, which would be the worst kind of error to make for cancer diagnosis.
 
 # ### Using the model for predictions
 
