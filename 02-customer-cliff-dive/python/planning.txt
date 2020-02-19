@@ -1,0 +1,19 @@
+- Problem: looks like there's a big dropoff in weekly active users starting in August
+    - "active user" = a user who has made some kind of server call in the given week
+- Possible explanations:
+    - A change in the way that weekly active users is calculated
+        - Calculate the same thing in the same way across the entire dataset
+    - A change in the way that server calls are used for the product
+        - Look at the individual types of "engagement" over time
+    - A change in the interface making it harder or less pleasant for users
+        - Look at individual types of engagement over time
+        - Look at the experiments going on
+    - A seasonal change that usually happens this time of year
+        - Plot the weekly engagement stat over time for previous years
+    - A change in emails sent meant the users didn't need to visit the website to get what they wanted done
+        - Look at other actions going on
+- Questions to answer:
+    - What is the most likely source of the drop in engagement?
+    - What, if anything, should Yammer do in response?
+    
+    
