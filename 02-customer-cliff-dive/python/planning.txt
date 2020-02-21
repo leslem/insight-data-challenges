@@ -3,8 +3,10 @@
 - Possible explanations:
     - A change in the way that weekly active users is calculated
         - Calculate the same thing in the same way across the entire dataset
+        - I don't see any indication of this
     - A change in the way that server calls are used for the product
         - Look at the individual types of "engagement" over time
+        - Some of the types of engagement are dropping more than others
     - A change in the interface making it harder or less pleasant for users
         - Look at individual types of engagement over time
         - Look at the experiments going on
@@ -15,5 +17,11 @@
 - Questions to answer:
     - What is the most likely source of the drop in engagement?
     - What, if anything, should Yammer do in response?
+    
+    
+- Recommendations to look into further:
+    - Compare this data to a wider time range - is this a seasonal trend?
+    - What are the email unsubscribe rates? Maybe people are being pushed to unsubscribe
+    
     
     
