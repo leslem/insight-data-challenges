@@ -4,4 +4,5 @@ matplotlib
 pandas
 plotly
 scikit-learn
+seaborn
 statsmodels

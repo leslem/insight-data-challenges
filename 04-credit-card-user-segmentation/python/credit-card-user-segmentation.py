@@ -11,10 +11,16 @@
 # - Calculate revenvue if the targeted cards were used by each related segment
 
 # +
+import matplotlib.pyplot as plt
+import numpy as np
 import os
 import pandas as pd
 import re
+import seaborn as sns
 import plotly.express as px
+
+from sklearn import cluster, metrics, preprocessing
+from sklearn.model_selection import train_test_split
 # -
 
 
@@ -33,8 +39,36 @@ print(users.head())
 print(users.info())
 # -
 
+# ```
+# CUST_ID : Credit card holder ID
+# BALANCE : Monthly average balance (based on daily balance averages)
+# BALANCE_FREQUENCY : Ratio of last 12 months with balance
+#     e.g. 3 / 12 months with balance
+# PURCHASES : Total purchase amount spent during last 12 months
+# ONEOFF_PURCHASES : Total amount of one-off purchases
+# INSTALLMENTS_PURCHASES : Total amount of installment purchases
+# CASH_ADVANCE : Total cash-advance amount
+# PURCHASES_ FREQUENCY : Frequency of purchases (percentage of months with at least one purchase)
+#     e.g. 4 / 12 months with at least one purchase (but is it just out of 12 months? or more?)
+# ONEOFF_PURCHASES_FREQUENCY : Frequency of one-off-purchases
+#     percentage of months with at least one one-off purchase
+# PURCHASES_INSTALLMENTS_FREQUENCY : Frequency of installment purchases
+#     percentage of months with at least one installment purchase
+# CASH_ADVANCE_FREQUENCY : Cash-Advance frequency
+#     percentage of months with at least one cash advance
+# AVERAGE_PURCHASE_TRX : Average amount per purchase transaction
+# CASH_ADVANCE_TRX : Average amount per cash-advance transaction
+# PURCHASES_TRX : Average amount per purchase transaction
+# CREDIT_LIMIT : Credit limit
+# PAYMENTS : Total payments (due amount paid by the customer to decrease their statement balance) in the period
+# MINIMUM_PAYMENTS : Total minimum payments due in the period.
+# PRC_FULL_PAYMENT : Percentage of months with full payment of the due statement balance
+# TENURE : Number of months as a customer
+# ```
+
 # Why is CUST_ID not numeric?
 # +
+users['CUST_ID'].head()
 users['CUST_ID'].tail()
 # -
 # Ok, it's an integer with a C at the beginning, so that's why it's a string. Not sensible, but ok, I can deal.
@@ -90,60 +124,154 @@ for v in histogram_vars:
     fig.show()
 # -
 
-# Are all of the "frequency" variables divided by 12?
+# Variables that have weird histograms
+# PURCHASES_FREQUENCY
+# BALANCE_FREQUENCY
+# PURCHASES_INSTALLMENTS_FREQUENCY
+# PRC_FULL_PAYMENT
+# ONEOFF_PURCHASES_FREQUENCY
+# CASH_ADVANCE_FREQUENCY
+
 # +
 frequency_vars = [v for v in users.columns if v.endswith('FREQUENCY')]
-for v in frequency_vars:
-    fig = px.histogram(users, x=v, nbins=12)
-    fig.show()
-# -
-# Yes, I think this is the best way to look at these frequency variables.
+for v in frequency_vars + ['PRC_FULL_PAYMENT']:
+    sns.distplot(users[v], rug=True, hist=True)
+    plt.show()
 
+values_per_variable[frequency_vars]
+# -
+
+# I can't really figure out the exact way that the frequency variables were calculated from these variable descriptions.
+# Is a density plot better?
+# It's hard to say and I don't think Plotly has great options here.
+
+# Are all of the "frequency" variables divided by 12?
+# No, they're not.
+# Is the TENURE variable the divisor in the FREQUENCY variables?
 # +
 for v in frequency_vars:
     print('-' * 50)
     print(v)
-    print((users[v] * 12).round(0).value_counts())
+    print((users[v] * users['TENURE']).round(0).value_counts())
     print(users[v].value_counts())
 # -
+# Yes, it looks like it is!
 
-# ```
-# CUST_ID : Credit card holder ID
-# BALANCE : Monthly average balance (based on daily balance averages)
-# BALANCE_FREQUENCY : Ratio of last 12 months with balance
-#     e.g. 3 / 12 months with balance
-# PURCHASES : Total purchase amount spent during last 12 months
-# ONEOFF_PURCHASES : Total amount of one-off purchases
-# INSTALLMENTS_PURCHASES : Total amount of installment purchases
-# CASH_ADVANCE : Total cash-advance amount
-# PURCHASES_ FREQUENCY : Frequency of purchases (percentage of months with at least one purchase)
-#     e.g. 4 / 12 months with at least one purchase (but is it just out of 12 months? or more?)
-# ONEOFF_PURCHASES_FREQUENCY : Frequency of one-off-purchases
-#     percentage of months with at least one one-off purchase
-# PURCHASES_INSTALLMENTS_FREQUENCY : Frequency of installment purchases
-#     percentage of months with at least one installment purchase
-# CASH_ADVANCE_FREQUENCY : Cash-Advance frequency
-#     percentage of months with at least one cash advance
-# AVERAGE_PURCHASE_TRX : Average amount per purchase transaction
-# CASH_ADVANCE_TRX : Average amount per cash-advance transaction
-# PURCHASES_TRX : Average amount per purchase transaction
-# CREDIT_LIMIT : Credit limit
-# PAYMENTS : Total payments (due amount paid by the customer to decrease their statement balance) in the period
-# MINIMUM_PAYMENTS : Total minimum payments due in the period.
-# PRC_FULL_PAYMENT : Percentage of months with full payment of the due statement balance
-# TENURE : Number of months as a customer
-# ```
 
-# I can't really figure out the exact way that the frequency variables were calculated from these variable descriptions.
-# Is a density plot better?
-# It's hard to say and I don't think Plotly has great options here. I guess the nbins=50 histograms are the best so far.
+# Ok, here's the best visualization of the frequency variables.
+# +
+for v in frequency_vars + ['PRC_FULL_PAYMENT']:
+    fig = px.histogram(users, x=v, nbins=20)
+    fig.show()
+# -
+# 
+
+# And try a pair plot just for fun.
+# +
+fig = px.scatter_matrix(users)
+fig.show()
+# -
+# That's really not useful.
+
+
+# Standardize variables for k-means clustering
+
+# Many variables are skewed, and will behave better if they are log-transformed
+# Are there any that ARE NOT skewed? No, they are all skewed.
+# +
+users_log_transformed = users.copy()
+vars_to_log_transform = users.columns.to_list()
+vars_to_log_transform.remove('CUST_ID')
+
+np.log10(users_log_transformed[vars_to_log_transform])
+# -
+# Log transform doesn't work because there are many 0 values in some of these variables
+
+# +
+# Find variables to standardize
+users_summary = users.drop('CUST_ID', axis=1).apply(['std', 'mean', 'median', 'min', 'max'], axis=0)
+with pd.option_context("display.max_columns", 100):
+    print(users_summary)
+
+users_summary.loc['min'] < 0
+users_summary.loc['max'] > 1.0
+non_std_min = users_summary.loc['min'] < 0
+non_std_max = users_summary.loc['max'] > 1.0
+
+vars_to_standardize = non_std_max | non_std_min
+vars_to_standardize = vars_to_standardize.index[vars_to_standardize].to_list()
+# -
+
+# +
+users_standardized = users.copy()
+
+# This is not a fast way
+for v in vars_to_standardize:
+    users_standardized[v] = (users_standardized[v] - users_standardized[v].mean()) / users_standardized[v].std()
+
+users_standardized_summary = users_standardized.drop('CUST_ID', axis=1).apply(
+    ['std', 'mean', 'median', 'min', 'max'], axis=0)
+
+with pd.option_context("display.max_columns", 100):
+    print(users_standardized_summary)
+# -
+
+# Try using sklearn scaling
+# +
+users_standardized = users.copy()
+vars_scaled = preprocessing.minmax_scale(users_standardized[vars_to_standardize])
+
+scaler = preprocessing.MinMaxScaler()
+users_standardized[vars_to_standardize] = scaler.fit_transform(users_standardized[vars_to_standardize])
+# -
+
+# +
+non_id_vars = users.columns.to_list()
+non_id_vars.remove('CUST_ID')
+
+for v in non_id_vars:
+    fig = px.histogram(users_standardized, x=v, nbins=20)
+    fig.show()
+# -
+# The min max scaling looks good, but I will need to redo it for train/test splits (can't transform the training data using information from the test data or that's peeking!)
 
 
 # K-means clustering on all of the variables.
 
+# +
+# k-means cluster single run on one train-test split
+X_train, X_test = train_test_split(users, test_size=0.2)
+
+k_means = cluster.KMeans(n_clusters=3)
+k_means.fit(users[non_id_vars].to_numpy())
+k_means.predict(users[non_id_vars].to_numpy())
+
+# 5-fold CV grid search with k-means clustering
+# Scale variables to standardize with each iteration here to prevent peeking
+# Elbow plot of silhouette score and MSSE to choose best value of K clusters
 
 
+# -
 
+
+# +
+# Fit model on all data to get the clusters fit on all users
+
+# -
+
+
+# +
+# Identify characteristics of the user segments
+
+# -
+
+# +
+# Identify incentives for targeting each segment
+
+# -
+
+
+# Are there any featurs I could engineer here? I think these are already engineered...
 
 # References:
 # - [americanexpress](https://www.americanexpress.com/en-us/business/trends-and-insights/articles/using-customer-segmentation-find-high-value-leads/)
