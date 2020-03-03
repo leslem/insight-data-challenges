@@ -15,12 +15,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
-import re
 import seaborn as sns
 import plotly.express as px
+import plotly.io as pio
+import plotly.graph_objects as go
 
 from sklearn import cluster, metrics, preprocessing
 from sklearn.model_selection import train_test_split
+
+
+pio.templates.default = "plotly_white"
 # -
 
 
@@ -81,19 +85,48 @@ users['CUST_ID'].duplicated().sum()
 
 # How do the numeric columns look?
 # +
-users.describe()
+with pd.option_context('display.max_columns', 100):
+    print(users.describe())
+# -
+
+# Are there any missing values?
+# +
+column_missing_totals = users.apply(lambda x: sum(x.isna()), axis=0)
+print(column_missing_totals)
+
+for v in users.columns:
+    if column_missing_totals[v] > 0:
+        print(users.loc[users[v].isna(), ['CUST_ID', v, 'TENURE']])
+# -
+
+# Remove one value where CREDIT_LIMIT is missing
+# +
+with pd.option_context('display.max_columns', 100):
+    print(users.loc[users['CREDIT_LIMIT'].isna(), ])
+# Nothing looks particularly strange about the rest of the values for this user. Can't figure out what's going on, so remove.
+users = users.loc[~users['CREDIT_LIMIT'].isna(), ]
+# -
+
+# For users missing values for MINIMUM_PAYMENTS, replace NaN with 0
+# +
+print(users['MINIMUM_PAYMENTS'].min())  # There are no users with $0 min payment due, which doesn't seem right.
+with pd.option_context('display.max_columns', 100):
+    print(users.loc[users['MINIMUM_PAYMENTS'].isna(), ])
+
+users.loc[users['MINIMUM_PAYMENTS'].isna(), 'MINIMUM_PAYMENTS'] = 0
 # -
 
 # Ok, now plot everything to get a look at it.
 # +
 users_melted = users.melt(id_vars=['CUST_ID'])
-fig = px.histogram(users_melted, x='value', facet_col='variable', facet_col_wrap=4)
+fig = px.histogram(users_melted, x='value', facet_col='variable', facet_col_wrap=4, nbins=20)
 fig.update_xaxes(matches=None)
 fig.update_yaxes(matches=None)
 fig.show()
 # -
 
-# Plotly is stupid about labeling axes on different scales in a faceted plot. Also there are some variables that look like they have categorical or discrete values.
+# Plotly is stupid about labeling axes on different scales in a faceted plot. Also there are some variables that look like they have categorical or discrete values. I think it's using the same bins for every variable. Stupid!
+
 # +
 values_per_variable = users.apply('nunique', 0)
 for v in users.columns:
@@ -164,7 +197,6 @@ for v in frequency_vars + ['PRC_FULL_PAYMENT']:
     fig = px.histogram(users, x=v, nbins=20)
     fig.show()
 # -
-# 
 
 # And try a pair plot just for fun.
 # +
@@ -235,6 +267,38 @@ for v in non_id_vars:
 # -
 # The min max scaling looks good, but I will need to redo it for train/test splits (can't transform the training data using information from the test data or that's peeking!)
 
+# Feature selection
+# in the future, this would be a good approach to take: https://www.stat.berkeley.edu/~mmahoney/pubs/NIPS09.pdf
+
+# Examine correlation between features
+# +
+feature_correlations = users_standardized[non_id_vars].corr()
+sns.heatmap(feature_correlations.abs(), annot=True)
+plt.show()
+# -
+# A few of the similar features (e.g. purchases and one-off purchases) are highly correlated
+# Concerning correlations:
+# ONEOFF_PURCHASES, PURCHASES (0.92)
+# CASH_ADVANCE_TRX, CASH_ADVANCE_FREQUENCY (0.8)
+# PURCHASES, PURCHASES_TRX (0.69)
+# CASH_ADVANCE_TRX, CASH_ADVANCE (0.66)
+# PURCHASES_TRX, INSTALLMENTS_PURCHASES (0.63)
+# PAYMENTS, PURCHASES (0.6)
+
+# +
+corrs = feature_correlations.abs().unstack()
+corrs = corrs.sort_values()
+corrs = corrs.reset_index()
+corrs = corrs.rename(columns={'level_0': 'var1', 'level_1': 'var2', 0: 'correlation'})
+
+fig = px.histogram(corrs, x='correlation', nbins=20)
+fig.show()
+print(corrs.loc[(corrs['var1'] != corrs['var2']) & (corrs['correlation'] > 0.5), ])
+# -
+
+# ok, so there's some correlation here, but this post suggests that's fine and that PCA is a better solution than dropping variables.
+# https://stats.stackexchange.com/questions/62253/do-i-need-to-drop-variables-that-are-correlated-collinear-before-running-kmeans
+
 
 # K-means clustering on all of the variables.
 
@@ -242,26 +306,70 @@ for v in non_id_vars:
 # k-means cluster single run on one train-test split
 X_train, X_test = train_test_split(users, test_size=0.2)
 
-k_means = cluster.KMeans(n_clusters=3)
-k_means.fit(users[non_id_vars].to_numpy())
-k_means.predict(users[non_id_vars].to_numpy())
+# Just fit the model on the whole data, seems like CV is not commonly used for clustering
+users_standardized_np = users_standardized[non_id_vars].to_numpy()
+users_standardized_np.shape
+k_means = cluster.KMeans(n_clusters=2)
+k_means.fit(users_standardized_np)
+cluster_assignments = k_means.predict(users_standardized_np).shape
 
-# 5-fold CV grid search with k-means clustering
-# Scale variables to standardize with each iteration here to prevent peeking
+k_means.cluster_centers_
+k_means.labels_
+
+# Plot clusters on first two variables
+plt.scatter(users_standardized_np[:, 0], users_standardized_np[:, 1])
+plt.scatter(k_means.cluster_centers_[:, 0], k_means.cluster_centers_[:, 1], c='red', marker='x')
+plt.show()
+# Not very informative...
+
+
+# Fit a k-means model with increasing values of K
 # Elbow plot of silhouette score and MSSE to choose best value of K clusters
 
+k_search = range(2, 50)
+silhouette_scores = []  # (higher is better)
+sses = []  # Inertia = sum of squared error (lower is better)
 
+for k in k_search:
+    model = cluster.KMeans(n_clusters=k)
+    model.fit(users_standardized_np)
+    cluster_assignments = model.predict(users_standardized_np)
+    silhouette_scores.append(metrics.silhouette_score(users_standardized_np, cluster_assignments))
+    sses.append(model.inertia_)
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=list(k_search), y=silhouette_scores,
+                         mode='lines+markers'))
+fig.update_layout(title='Silhouette score with increasing K',
+                  xaxis_title='K',
+                  yaxis_title='Silhouette score')
+fig.show()
+
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=list(k_search), y=sses,
+                         mode='lines+markers'))
+fig.update_layout(title='Inertia (SSE) with increasing K',
+                  xaxis_title='K',
+                  yaxis_title='Inertia (SSE)')
+fig.show()
 # -
-
+# My choice of K: 11!
 
 # +
 # Fit model on all data to get the clusters fit on all users
-
+final_k = 11
+final_model = cluster.KMeans(n_clusters=final_k)
+final_model.fit(users_standardized_np)
+final_cluster_assignments = final_model.predict(users_standardized_np)
+users['segment'] = final_cluster_assignments
 # -
 
-
-# +
 # Identify characteristics of the user segments
+# Plot boxplots of all features by cluster
+# +
+# TODO: need to melt this to plot it
+fig = px.box(users[non_id_vars + ['segment']], x='')
+fig.show()
 
 # -
 
@@ -284,3 +392,4 @@ k_means.predict(users[non_id_vars].to_numpy())
 # - [sptf](https://sptf.info/images/IND-SPTF-2018-Segmentation.pdf)
 # - [towardsdatascience](https://towardsdatascience.com/clustering-algorithms-for-customer-segmentation-af637c6830ac)
 # - [uxdesign](https://uxdesign.cc/how-to-think-segmentation-from-day-1-f714df093ccb)
+# - https://blog.floydhub.com/introduction-to-k-means-clustering-in-python-with-scikit-learn/
