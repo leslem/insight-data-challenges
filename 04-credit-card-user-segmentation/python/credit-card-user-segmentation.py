@@ -321,8 +321,9 @@ plt.scatter(users_standardized_np[:, 0], users_standardized_np[:, 1])
 plt.scatter(k_means.cluster_centers_[:, 0], k_means.cluster_centers_[:, 1], c='red', marker='x')
 plt.show()
 # Not very informative...
+# -
 
-
+# +
 # Fit a k-means model with increasing values of K
 # Elbow plot of silhouette score and MSSE to choose best value of K clusters
 
@@ -340,6 +341,19 @@ for k in k_search:
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=list(k_search), y=silhouette_scores,
                          mode='lines+markers'))
+fig.add_shape(
+    dict(
+        type="line",
+        x0=11,
+        y0=min(silhouette_scores) * 0.95,
+        x1=11,
+        y1=max(silhouette_scores) * 1.05,
+        line=dict(
+            color="Red",
+            width=1
+        )
+    )
+)
 fig.update_layout(title='Silhouette score with increasing K',
                   xaxis_title='K',
                   yaxis_title='Silhouette score')
@@ -348,6 +362,19 @@ fig.show()
 fig = go.Figure()
 fig.add_trace(go.Scatter(x=list(k_search), y=sses,
                          mode='lines+markers'))
+fig.add_shape(
+    dict(
+        type="line",
+        x0=11,
+        y0=min(sses) * 0.95,
+        x1=11,
+        y1=max(sses) * 1.05,
+        line=dict(
+            color="Red",
+            width=1
+        )
+    )
+)
 fig.update_layout(title='Inertia (SSE) with increasing K',
                   xaxis_title='K',
                   yaxis_title='Inertia (SSE)')
@@ -362,24 +389,57 @@ final_model = cluster.KMeans(n_clusters=final_k)
 final_model.fit(users_standardized_np)
 final_cluster_assignments = final_model.predict(users_standardized_np)
 users['segment'] = final_cluster_assignments
+users['segment'] = users['segment'].astype('category')
+users_standardized['segment'] = users['segment']
 # -
 
 # Identify characteristics of the user segments
 # Plot boxplots of all features by cluster
 # +
 # TODO: need to melt this to plot it
-fig = px.box(users[non_id_vars + ['segment']], x='')
-fig.show()
+for v in non_id_vars:
+    fig = px.histogram(users[[v, 'segment']], x=v, color='segment')
+    fig.show()
 
+for v in set(non_id_vars) - set('TENURE'):
+    fig = px.scatter(users, x='TENURE', y=v, color='segment')
+    fig.show()
+
+fig = px.scatter_matrix(
+    users, dimensions=non_id_vars, color='segment'
+)
+fig.update_traces(diagonal_visible=False, showupperhalf=False)
+fig.show()
 # -
 
 # +
 # Identify incentives for targeting each segment
+users_melted = users.melt(id_vars=['CUST_ID', 'segment'])
+users_standardized_melted = users_standardized.melt(id_vars=['CUST_ID', 'segment'])
+fig = px.box(
+    users_standardized_melted,
+    x='variable', y='value', color='segment',
+    facet_col='variable', facet_col_wrap=5
+)
+fig.update_xaxes(matches=None)
+fig.show()
 
+for seg in users['segment'].unique():
+    tmp = users.loc[users['segment'] == seg, non_id_vars].apply(
+        ['std', 'mean', 'median', 'min', 'max'], axis=0)
+    tmp['segment'] = seg
+    tmp = tmp.reset_index()
+    tmp = tmp.melt(id_vars=['segment', 'index'])
+    if seg == 0:
+        seg_summary = tmp
+    else:
+        seg_summary = seg_summary.append(tmp, ignore_index=True)
+
+seg_summary = seg_summary.rename(columns={'index': 'statistic'})
 # -
 
 
-# Are there any featurs I could engineer here? I think these are already engineered...
+# Are there any features I could engineer here? I think these are already engineered...
 
 # References:
 # - [americanexpress](https://www.americanexpress.com/en-us/business/trends-and-insights/articles/using-customer-segmentation-find-high-value-leads/)
@@ -393,3 +453,11 @@ fig.show()
 # - [towardsdatascience](https://towardsdatascience.com/clustering-algorithms-for-customer-segmentation-af637c6830ac)
 # - [uxdesign](https://uxdesign.cc/how-to-think-segmentation-from-day-1-f714df093ccb)
 # - https://blog.floydhub.com/introduction-to-k-means-clustering-in-python-with-scikit-learn/
+
+# +
+# This code is used to run the .py script from beginning to end in the python interpreter
+# with open('python/credit-card-user-segmentation.py', 'r') as f:
+#     exec(f.read())
+
+# plt.close('all')
+# -
