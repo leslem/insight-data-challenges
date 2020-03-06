@@ -385,7 +385,7 @@ fig.show()
 # +
 # Fit model on all data to get the clusters fit on all users
 final_k = 11
-final_model = cluster.KMeans(n_clusters=final_k)
+final_model = cluster.KMeans(n_clusters=final_k, random_state=48)
 final_model.fit(users_standardized_np)
 final_cluster_assignments = final_model.predict(users_standardized_np)
 users['segment'] = final_cluster_assignments
