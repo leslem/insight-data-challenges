@@ -48,8 +48,13 @@ import os
 import pandas as pd
 import seaborn as sns
 
-from datetime import datetime, timedelta
-from sklearn .preprocessing import MultiLabelBinarizer
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import plot_confusion_matrix
+from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
+from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder
+from treeinterpreter import treeinterpreter as ti, utils
+
 
 sns.set_style("whitegrid")
 # -
@@ -346,9 +351,9 @@ core_inspections.loc[core_inspections['is_gradeable'], 'GRADE'].value_counts(dro
 core_inspections.loc[~core_inspections['is_gradeable'], 'GRADE'].value_counts(dropna=False)
 
 # When using categorical variables in a groupby, Pandas will by default plan to have NaN values for each empty
-# group as well, and that led to an array allocation here. Using observed=True fixed it
+# group as well, and that led to an array allocation error here. Using observed=True fixed it.
 initial_inspections = core_inspections.loc[core_inspections['is_initial_inspection'], ].groupby(
-    ['CAMIS', 'BORO', 'Census Tract', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
+    ['CAMIS', 'BORO', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
      'CUISINE DESCRIPTION', 'INSPECTION TYPE'], observed=True).aggregate(
     passed=('GRADE', lambda x: x.iloc[0] == 'A'),
     grade=('GRADE', 'first'),
@@ -357,17 +362,33 @@ initial_inspections = core_inspections.loc[core_inspections['is_initial_inspecti
     violation_codes=('VIOLATION CODE', lambda x: x.loc[~x.isna()].to_list())
 ).reset_index()
 
-# Put some plotting in here
+for v in ['passed', 'grade', 'has_critical_flag', 'n_violations']:
+    g = sns.countplot(data=initial_inspections, x=v)
+    g.set_xticklabels(g.get_xticklabels(), rotation=60, horizontalalignment='right')
+    plt.tight_layout()
+    plt.show()
 
-
-# Add one-hot encoding for each violation code
+# Add one-hot encoding for each violation code, BORO, and CUISINE DESCRIPTION
 initial_inspections['violation_codes']
 mlb = MultiLabelBinarizer()
 expanded_violation_codes = mlb.fit_transform(initial_inspections['violation_codes'])
-expanded_violation_codes = pd.DataFrame(expanded_violation_codes, columns='violation_' + mlb.classes_)
+initial_inspections_violation_code_vars = 'violation_' + mlb.classes_
+expanded_violation_codes = pd.DataFrame(expanded_violation_codes, columns=initial_inspections_violation_code_vars)
 initial_inspections = pd.concat([initial_inspections, expanded_violation_codes], axis=1)
 
-initial_inspections.info()
+ohe = OneHotEncoder(sparse=False)
+boro_encoding = ohe.fit_transform(initial_inspections['BORO'].to_numpy().reshape(-1, 1))
+initial_inspections_boro_vars = 'BORO_' + ohe.categories_[0]
+boro_encoding = pd.DataFrame(boro_encoding, columns=initial_inspections_boro_vars)
+initial_inspections = pd.concat([initial_inspections, boro_encoding], axis=1)
+
+ohe = OneHotEncoder(sparse=False)
+cuisine_encoding = ohe.fit_transform(initial_inspections['CUISINE DESCRIPTION'].to_numpy().reshape(-1, 1))
+initial_inspections_cuisine_vars = 'cuisine_' + ohe.categories_[0]
+cuisine_encoding = pd.DataFrame(cuisine_encoding, columns=initial_inspections_cuisine_vars)
+initial_inspections = pd.concat([initial_inspections, cuisine_encoding], axis=1)
+
+print(initial_inspections.info(max_cols=500))
 # -
 
 
@@ -378,7 +399,7 @@ closed_actions = (
 )
 
 reinspections = core_inspections.loc[core_inspections['is_reinspection'], ].groupby(
-    ['CAMIS', 'BORO', 'Census Tract', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
+    ['CAMIS', 'BORO', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
      'CUISINE DESCRIPTION', 'INSPECTION TYPE'], observed=True).aggregate(
     passed=('GRADE', lambda x: x.iloc[0] == 'A'),
     grade=('GRADE', 'first'),
@@ -389,8 +410,11 @@ reinspections = core_inspections.loc[core_inspections['is_reinspection'], ].grou
 ).reset_index()
 
 # Put some plotting in here
-
-
+for v in ['passed', 'grade', 'closed', 'has_critical_flag', 'n_violations']:
+    g = sns.countplot(data=reinspections, x=v)
+    g.set_xticklabels(g.get_xticklabels(), rotation=60, horizontalalignment='right')
+    plt.tight_layout()
+    plt.show()
 
 reinspections['violation_codes']
 mlb = MultiLabelBinarizer()
@@ -398,20 +422,129 @@ expanded_violation_codes = mlb.fit_transform(reinspections['violation_codes'])
 expanded_violation_codes = pd.DataFrame(expanded_violation_codes, columns='violation_' + mlb.classes_)
 reinspections = pd.concat([reinspections, expanded_violation_codes], axis=1)
 
-reinspections.info()
+ohe = OneHotEncoder(sparse=False)
+boro_encoding = ohe.fit_transform(reinspections['BORO'].to_numpy().reshape(-1, 1))
+reinspections_boro_vars = 'BORO_' + ohe.categories_[0]
+boro_encoding = pd.DataFrame(boro_encoding, columns=reinspections_boro_vars)
+reinspections = pd.concat([reinspections, boro_encoding], axis=1)
+
+ohe = OneHotEncoder(sparse=False)
+cuisine_encoding = ohe.fit_transform(reinspections['CUISINE DESCRIPTION'].to_numpy().reshape(-1, 1))
+reinspections_cuisine_vars = 'cuisine_' + ohe.categories_[0]
+cuisine_encoding = pd.DataFrame(cuisine_encoding, columns=reinspections_cuisine_vars)
+reinspections = pd.concat([reinspections, cuisine_encoding], axis=1)
+
+reinspections.info(max_cols=500)
 # -
 
 # ## Find important features for classification of failed inspections
 
+# ### Prepare data for random forest
+
+# Are there low-variance features that should be removed?
+
 # +
+initial_inspections_variances = initial_inspections.var(axis=0)
+with pd.option_context('display.max_rows', 200):
+    print(initial_inspections_variances.sort_values())
+
+g = sns.distplot(initial_inspections_variances, rug=False)
+plt.show()
+# -
+
+# I'm not sure how meaningful variance is for categorical variables
+
+# ### Just try running random forest to get it working
+
+# +
+id_vars = ['CAMIS', 'INSPECTION DATE', 'INSPECTION TYPE', 'violation_codes', 'BORO', 'CUISINE DESCRIPTION']
+label_vars = ['passed', 'grade']
+feature_vars = list(set(initial_inspections.columns) - set(id_vars) - set(label_vars))
+feature_vars.sort()
+
+X = initial_inspections[feature_vars].to_numpy()
+y = initial_inspections[label_vars[0]]
+X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=48)
+
+forest = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=48)
+forest.fit(X_train, y_train)
+forest.predict(X_test)
+forest.score(X_test, y_test)
+forest.feature_importances_
+# g = sns.barplot(x=forest.feature_importances_, y=feature_vars)
+# plt.show()
+
+logreg = LogisticRegression(random_state=48, max_iter=1000)
+logreg.fit(X_train, y_train)
+logreg.predict(X_test)
+logreg.score(X_test, y_test)
+# -
+
+# This model looks fine, just based on accuracy (89%). Now to do cross-validation...
+
+# ### Cross validation
+
+# +
+forest = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=48)
+cv_results = cross_validate(forest, X, y,
+                            cv=StratifiedKFold(n_splits=5),
+                            return_train_score=False,
+                            scoring=['accuracy', 'balanced_accuracy', 'f1', 'f1_weighted', 'recall', 'roc_auc']
+                            )
+cv_means = {k: np.mean(v) for k, v in cv_results.items()}
+print(cv_means)
+# -
+
+# ### Fit the final model
+
+# +
+final_forest = RandomForestClassifier(n_estimators=500, class_weight='balanced', oob_score=True, random_state=48)
+final_forest.fit(X_train, y_train)
+final_predictions = final_forest.predict(X_test)
+final_forest.feature_importances_
+final_forest.oob_score_
+
+final_feature_importances = pd.DataFrame({'feature': feature_vars, 'importance': final_forest.feature_importances_})
+final_feature_importances = final_feature_importances.sort_values('importance', ascending=False)
+
+g = sns.barplot(x='importance', y='feature', data=final_feature_importances.head(40))
+plt.tight_layout()
+plt.show()
 
 # -
+
+# Interpret the feature contributions
+
+# +
+prediction, bias, contributions = ti.predict(final_forest, instance)
+print "Prediction", prediction
+print "Bias (trainset prior)", bias
+print "Feature contributions:"
+for c, feature in zip(contributions[0], 
+                             iris.feature_names):
+    print feature, c
+# -
+
+# +
+# -
+
+# +
+# -
+
 
 
 
 # References:
 # - https://medium.com/@sam.weinger/looking-for-borough-bias-in-nyc-restaurant-inspection-results-e15640cd3f97
 # - https://www.foodsafetynews.com/2018/05/harvard-researchers-say-fixing-food-safety-inspectors-schedules-could-end-many-violations/
+
+
+# - https://www.researchgate.net/post/Im_trying_to_apply_random_forests_in_a_sparse_data_set_Unfortunately_there_is_more_than_40_error_in_my_result_Can_anyone_suggest_where_to_refine
+# - https://medium.com/all-things-ai/in-depth-parameter-tuning-for-random-forest-d67bb7e920d
+
+# - https://towardsdatascience.com/explaining-feature-importance-by-example-of-a-random-forest-d9166011959e
+# - https://blog.datadive.net/random-forest-interpretation-with-scikit-learn/
+# - https://github.com/andosa/treeinterpreter
 
 
 # +
