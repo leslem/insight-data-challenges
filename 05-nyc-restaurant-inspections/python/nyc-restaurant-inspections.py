@@ -49,6 +49,7 @@ import pandas as pd
 import seaborn as sns
 
 from datetime import datetime, timedelta
+from sklearn .preprocessing import MultiLabelBinarizer
 
 sns.set_style("whitegrid")
 # -
@@ -154,6 +155,9 @@ print(
 inspections['VIOLATION CODE'].nunique()
 violation_descriptions = inspections[['VIOLATION CODE', 'VIOLATION DESCRIPTION']].groupby(
     'VIOLATION CODE').aggregate('first')
+
+with pd.option_context('display.max_rows', 200):
+    print(violation_descriptions)
 # -
 
 
@@ -163,22 +167,27 @@ violation_descriptions = inspections[['VIOLATION CODE', 'VIOLATION DESCRIPTION']
 
 # +
 gradeable_inspection_types = (
-    'Cycle Inspection/Initial Inspection',
-    'Cycle Inspection/Re-Inspection',
-    'Pre-Permit (Operational)/Initial Inspection',
+    'Cycle Inspection / Initial Inspection',
+    'Cycle Inspection / Re-Inspection',
+    'Pre-Permit (Operational) / Initial Inspection',
     'Pre-Permit (Operational)/Re-Inspection',
 )
 gradeable_actions = (
-    'Violations were cited in the following area(s)',
-    'No violations were recorded at the time of this inspection',
-    'Establishment Closed by DOHMH',
+    'Violations were cited in the following area(s).',
+    'No violations were recorded at the time of this inspection.',
+    'Establishment Closed by DOHMH.',
 )
 gradeable_inspection_date_min = datetime(2010, 7, 27)
+
+inspections['INSPECTION TYPE'].isin(gradeable_inspection_types).sum()
+inspections['ACTION'].isin(gradeable_actions).sum()
+np.sum(inspections['INSPECTION DATE'] >= gradeable_inspection_date_min)
 
 inspections['is_gradeable'] = ((inspections['INSPECTION TYPE'].isin(gradeable_inspection_types))
                                & (inspections['ACTION'].isin(gradeable_actions))
                                & (inspections['INSPECTION DATE'] >= gradeable_inspection_date_min)
                                )
+inspections['is_gradeable'].value_counts(dropna=False)
 # -
 
 # ### Add variables for what kind of inspection it was
@@ -328,22 +337,74 @@ plt.show()
 # ### Summary of initial inspection failures
 
 # +
+passing_grades = ('A', )
+nonpassing_grades = ('B', 'C', )
+pending_grades = ('N', 'Z', 'P', )
+
+# Since there are NaNs in both gradeable and ungradeable, I'm going to infer that GRADE of NaN means non-passing
+core_inspections.loc[core_inspections['is_gradeable'], 'GRADE'].value_counts(dropna=False)
+core_inspections.loc[~core_inspections['is_gradeable'], 'GRADE'].value_counts(dropna=False)
+
+# When using categorical variables in a groupby, Pandas will by default plan to have NaN values for each empty
+# group as well, and that led to an array allocation here. Using observed=True fixed it
 initial_inspections = core_inspections.loc[core_inspections['is_initial_inspection'], ].groupby(
     ['CAMIS', 'BORO', 'Census Tract', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
-     'CUISINE DESCRIPTION', 'INSPECTION TYPE']).aggregate(
-    
-)
+     'CUISINE DESCRIPTION', 'INSPECTION TYPE'], observed=True).aggregate(
+    passed=('GRADE', lambda x: x.iloc[0] == 'A'),
+    grade=('GRADE', 'first'),
+    has_critical_flag=('CRITICAL FLAG', lambda x: np.any(x == 'Y')),
+    n_violations=('VIOLATION CODE', lambda x: x.loc[~x.isna()].nunique()),
+    violation_codes=('VIOLATION CODE', lambda x: x.loc[~x.isna()].to_list())
+).reset_index()
 
-# Add one-hot encoding for most common violation types in each inspection
+# Put some plotting in here
 
+
+# Add one-hot encoding for each violation code
+initial_inspections['violation_codes']
+mlb = MultiLabelBinarizer()
+expanded_violation_codes = mlb.fit_transform(initial_inspections['violation_codes'])
+expanded_violation_codes = pd.DataFrame(expanded_violation_codes, columns='violation_' + mlb.classes_)
+initial_inspections = pd.concat([initial_inspections, expanded_violation_codes], axis=1)
+
+initial_inspections.info()
 # -
 
 
+# +
+closed_actions = (
+    'Establishment Closed by DOHMH.  Violations were cited in the following area(s) and those requiring immediate action were addressed.',
+    'Establishment re-closed by DOHMH',
+)
 
-# ## Summary of violations by type
+reinspections = core_inspections.loc[core_inspections['is_reinspection'], ].groupby(
+    ['CAMIS', 'BORO', 'Census Tract', 'INSPECTION DATE', 'inspection_month', 'inspection_dayofweek',
+     'CUISINE DESCRIPTION', 'INSPECTION TYPE'], observed=True).aggregate(
+    passed=('GRADE', lambda x: x.iloc[0] == 'A'),
+    grade=('GRADE', 'first'),
+    closed=('ACTION', lambda x: x.isin(closed_actions).any()),
+    has_critical_flag=('CRITICAL FLAG', lambda x: np.any(x == 'Y')),
+    n_violations=('VIOLATION CODE', lambda x: x.loc[~x.isna()].nunique()),
+    violation_codes=('VIOLATION CODE', lambda x: x.loc[~x.isna()].to_list())
+).reset_index()
 
+# Put some plotting in here
+
+
+
+reinspections['violation_codes']
+mlb = MultiLabelBinarizer()
+expanded_violation_codes = mlb.fit_transform(reinspections['violation_codes'])
+expanded_violation_codes = pd.DataFrame(expanded_violation_codes, columns='violation_' + mlb.classes_)
+reinspections = pd.concat([reinspections, expanded_violation_codes], axis=1)
+
+reinspections.info()
+# -
+
+# ## Find important features for classification of failed inspections
 
 # +
+
 # -
 
 
