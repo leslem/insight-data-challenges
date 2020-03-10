@@ -46,12 +46,14 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 import pandas as pd
+import pickle
 import seaborn as sns
 
+from datetime import datetime
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import plot_confusion_matrix
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_validate
+from sklearn.model_selection import cross_validate, GridSearchCV, train_test_split, StratifiedKFold
 from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder
 from treeinterpreter import treeinterpreter as ti, utils
 
@@ -61,6 +63,7 @@ sns.set_style("whitegrid")
 
 # +
 data_dir = '~/devel/insight-data-challenges/05-nyc-restaurant-inspections/data'
+output_dir = '~/devel/insight-data-challenges/05-nyc-restaurant-inspections/output'
 # -
 
 # ## Read in and clean the user data
@@ -437,7 +440,7 @@ reinspections = pd.concat([reinspections, cuisine_encoding], axis=1)
 reinspections.info(max_cols=500)
 # -
 
-# ## Find important features for classification of failed inspections
+# ## Find important features for classification of failed initial inspections using RandomForest
 
 # ### Prepare data for random forest
 
@@ -466,18 +469,14 @@ X = initial_inspections[feature_vars].to_numpy()
 y = initial_inspections[label_vars[0]]
 X_train, X_test, y_train, y_test = train_test_split(X, y, stratify=y, random_state=48)
 
-forest = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=48)
+forest = RandomForestClassifier(n_estimators=20, class_weight='balanced', oob_score=True, random_state=48)
 forest.fit(X_train, y_train)
 forest.predict(X_test)
 forest.score(X_test, y_test)
 forest.feature_importances_
+forest.oob_score_
 # g = sns.barplot(x=forest.feature_importances_, y=feature_vars)
 # plt.show()
-
-logreg = LogisticRegression(random_state=48, max_iter=1000)
-logreg.fit(X_train, y_train)
-logreg.predict(X_test)
-logreg.score(X_test, y_test)
 # -
 
 # This model looks fine, just based on accuracy (89%). Now to do cross-validation...
@@ -485,24 +484,36 @@ logreg.score(X_test, y_test)
 # ### Cross validation
 
 # +
-forest = RandomForestClassifier(n_estimators=200, class_weight='balanced', random_state=48)
+chosen_metrics = ['accuracy', 'balanced_accuracy', 'f1', 'f1_weighted', 'recall', 'roc_auc']
+forest = RandomForestClassifier(n_estimators=50, class_weight='balanced', random_state=48)
 cv_results = cross_validate(forest, X, y,
                             cv=StratifiedKFold(n_splits=5),
                             return_train_score=False,
-                            scoring=['accuracy', 'balanced_accuracy', 'f1', 'f1_weighted', 'recall', 'roc_auc']
+                            scoring=chosen_metrics
                             )
 cv_means = {k: np.mean(v) for k, v in cv_results.items()}
 print(cv_means)
+
+# n_estimators_grid = np.concatenate((np.arange(25, 175, 25), np.arange(200, 600, 100)))
+# n_estimators_grid = np.arange(25, 175, 25)
+# n_estimators_search = GridSearchCV(
+#     estimator=RandomForestClassifier(random_state=48),
+#     param_grid={'n_estimators': n_estimators_grid},
+#     scoring=chosen_metrics,
+#     n_jobs=3,
+#     cv=StratifiedKFold(n_splits=5),
+#     refit=False
+# )
+# n_estimators_search.fit(X, y)
 # -
 
 # ### Fit the final model
 
 # +
-final_forest = RandomForestClassifier(n_estimators=500, class_weight='balanced', oob_score=True, random_state=48)
+final_forest = RandomForestClassifier(n_estimators=100, class_weight='balanced', random_state=48)
 final_forest.fit(X_train, y_train)
 final_predictions = final_forest.predict(X_test)
 final_forest.feature_importances_
-final_forest.oob_score_
 
 final_feature_importances = pd.DataFrame({'feature': feature_vars, 'importance': final_forest.feature_importances_})
 final_feature_importances = final_feature_importances.sort_values('importance', ascending=False)
@@ -511,26 +522,220 @@ g = sns.barplot(x='importance', y='feature', data=final_feature_importances.head
 plt.tight_layout()
 plt.show()
 
+plot_confusion_matrix(final_forest, X_test, y_test, values_format=',.0f')
+plt.show()
 # -
 
-# Interpret the feature contributions
+# ### Interpret the feature contributions
 
 # +
-prediction, bias, contributions = ti.predict(final_forest, instance)
-print "Prediction", prediction
-print "Bias (trainset prior)", bias
-print "Feature contributions:"
-for c, feature in zip(contributions[0], 
-                             iris.feature_names):
-    print feature, c
+prediction, bias, contributions = ti.predict(final_forest, X_train[1, ].reshape(1, -1))
+print("Prediction"), prediction
+print("Bias (trainset prior)"), bias
+print("Feature contributions:")
+for c, feature in zip(contributions[0], feature_vars):
+    print(feature, c)
 # -
+
+# I don't really find this very helpful. I would need to do this for every sample in the dataset to get something informative.
+# Go back to logistic regression so you can actually explain it!
+
+# ## Find important features for classification of failed initial inspections using logistic regression
+
+# ### Fit an initial logistic regression model
 
 # +
+logreg = LogisticRegression(random_state=48, max_iter=1000, solver='saga')
+logreg.fit(X_train, y_train)
+logreg.predict(X_test)
+logreg.score(X_test, y_test)
 # -
+
+
+# ### Cross validation of a basic logistic regression model
 
 # +
+logreg = LogisticRegression(random_state=48, max_iter=1000, solver='saga')
+cv_results = cross_validate(logreg, X, y,
+                            cv=StratifiedKFold(n_splits=5),
+                            return_train_score=False,
+                            scoring=chosen_metrics
+                            )
+cv_means = {k: np.mean(v) for k, v in cv_results.items()}
+print(cv_means)
+
+# ### Grid search to tune over regularization hyperparameters
+
+# +
+param_grid = {
+    # C = inverse of regularization strength; positive float; smaller C = stronger regularization
+    'C': (10.0, 4.0, 2.0, 1.0, 0.5, 0.1, 0.01, 0.001),  # Similar to defaults for LogisticRegressionCV
+    'penalty': ['l1', 'l2']  # Regularization penalty type; L1 = Lasso, L2 = Ridge
+    # L1 = penalized by absolute value of coefficient magnitude
+    # L2 = penalized by squared magnitude of coefficient
+}
+
+# The higher the value of C, the longer the fit takes and the higher the max_iter needed.
+
+# Use saga solver because it is faster for large data and supports both L1 and L2 regularization
+logreg_gridsearch_outfile = os.path.join(os.path.expanduser(output_dir), 'logreg_gridsearch_results.pickle')
+
+if not os.path.exists(logreg_gridsearch_outfile):
+    classifier_grid_search = GridSearchCV(
+        estimator=LogisticRegression(solver='saga', random_state=48, max_iter=5000),
+        param_grid=param_grid,
+        cv=5, scoring='roc_auc', verbose=2, n_jobs=3
+    )
+    grid_search_models = classifier_grid_search.fit(X, y)
+    with open(logreg_gridsearch_outfile, 'wb') as f:
+        pickle.dump(grid_search_models, f, pickle.HIGHEST_PROTOCOL)
+else:
+    with open(logreg_gridsearch_outfile, 'rb') as f:
+        grid_search_models = pickle.load(f)
+
+grid_search_results = pd.DataFrame(grid_search_models.cv_results_)
+grid_search_results['params_string'] = grid_search_results['params'].apply(
+    lambda x: 'C={:.3f}\nPenalty={}'.format(x['C'], x['penalty']))
+grid_search_results = grid_search_results.sort_values(by='rank_test_score', ascending=True)
+with pd.option_context('display.max_columns', 50):
+    print(grid_search_results)
+
+g = sns.barplot(x='mean_test_score', y='params_string', data=grid_search_results)
+g.set(xlabel='Mean AUC ROC', ylabel='Hyperparameter values')
+plt.tight_layout()
+plt.show()
 # -
 
+# L1 and L2 regularization are bascially both good. And any C higher than 0.1 is good.
+# I choose C = 0.1 and penalty = l2 because they're fastest of the ones with good AUC ROC.
+
+# ### Fit the final logistic regression model
+
+# +
+final_C = 0.1
+final_penalty = 'l1'
+final_logreg = LogisticRegression(random_state=48, max_iter=5000, C=final_C, penalty=final_penalty, solver='saga')
+final_logreg.fit(X_train, y_train)
+final_logreg_predictions = final_logreg.predict(X_test)
+
+plot_confusion_matrix(final_logreg, X_test, y_test, values_format=',.0f')
+plt.show()
+# -
+
+# ### Gather coefficients & odds ratios
+
+# +
+final_coefficients = pd.DataFrame({'feature': feature_vars, 'coefficient': final_logreg.coef_[0]})
+# coef_ gives the coefficients contributing to classes_[1], which is passed="True"
+final_coefficients['magnitude'] = final_coefficients['coefficient'].abs()
+final_coefficients['direction'] = np.sign(final_coefficients['coefficient'])
+final_coefficients['direction'] = final_coefficients['direction'].replace({-1.0: 'negative', 1.0: 'positive', 0: 'NA'})
+final_coefficients = final_coefficients.sort_values('magnitude', ascending=False)
+final_coefficients['odds_ratio'] = np.exp(final_coefficients['coefficient'])
+# "The odds ratio is defined as the ratio of the odds of A in the presence of B and the odds of A in the absence of B,
+# or equivalently (due to symmetry), the ratio of the odds of B in the presence of A and the odds of B in the
+# absence of A."
+# Here it is the odds of passing the initial inspection in the presence of the feature.
+
+with pd.option_context('display.max_rows', 200):
+    print(final_coefficients)
+
+# g = sns.barplot(x='magnitude', y='feature', hue='direction', data=final_coefficients.head(40))
+# g.set(xlabel='Coefficient magnitude', ylabel='Feature')
+# plt.tight_layout()
+# plt.show()
+# -
+
+# ### Investigate model results
+
+# #### What are odds ratios for the various violation codes?
+
+# +
+g = sns.barplot(x='odds_ratio', y='feature', hue='direction',
+                data=final_coefficients[final_coefficients['feature'].isin(
+                    initial_inspections_violation_code_vars)].sort_values('odds_ratio', ascending=True))
+g.set(xlabel='Odds ratio', ylabel='Feature')
+plt.tight_layout()
+plt.show()
+
+top_violation_codes = final_coefficients.loc[final_coefficients['feature'].isin(
+    initial_inspections_violation_code_vars),
+].sort_values('odds_ratio', ascending=False).head(10)['feature'].str.replace('violation_', '')
+
+bottom_violation_codes = final_coefficients.loc[final_coefficients['feature'].isin(
+    initial_inspections_violation_code_vars),
+].sort_values('odds_ratio', ascending=True).head(10)['feature'].str.replace('violation_', '')
+
+with pd.option_context('display.max_rows', 100):
+    print(violation_descriptions.loc[violation_descriptions.index.isin(top_violation_codes), ])
+    print(violation_descriptions.loc[violation_descriptions.index.isin(bottom_violation_codes), ])
+# -
+
+# https://rules.cityofnewyork.us/tags/sanitary-inspection
+# "In the list of unscored violations, a new violation code 22G containing a penalty for violations of Administrative Code §16-329 (c) which prohibits use of expanded polystyrene single service articles, is being added.   "
+# https://www1.nyc.gov/office-of-the-mayor/news/295-18/mayor-de-blasio-ban-single-use-styrofoam-products-new-york-city-will-be-effect
+# From a recent ban on styrofoam products!
+
+# #### What are odds ratios for the boroughs?
+
+# +
+g = sns.barplot(x='odds_ratio', y='feature',
+                data=final_coefficients[final_coefficients['feature'].isin(
+                    initial_inspections_boro_vars)].sort_values('odds_ratio', ascending=True))
+g.set(xlabel='Odds ratio', ylabel='Feature')
+g.axvline(1.0)
+plt.tight_layout()
+plt.show()
+# -
+
+# The boroughs are all pretty close to having the same odds of failing initial inspection.
+
+# #### What are odds ratios for the various cuisines?
+
+# +
+g = sns.barplot(x='odds_ratio', y='feature', hue='direction',
+                data=final_coefficients[final_coefficients['feature'].isin(
+                    initial_inspections_cuisine_vars)].sort_values('odds_ratio', ascending=True))
+g.set(xlabel='Odds ratio', ylabel='Feature')
+plt.tight_layout()
+plt.show()
+
+top_cuisines = final_coefficients.loc[
+    final_coefficients['feature'].isin(initial_inspections_cuisine_vars) & (final_coefficients['odds_ratio'] > 1.0),
+].sort_values('odds_ratio', ascending=False)
+
+bottom_cuisines = final_coefficients.loc[
+    final_coefficients['feature'].isin(initial_inspections_cuisine_vars) & (final_coefficients['odds_ratio'] < 1.0),
+].sort_values('odds_ratio', ascending=True)
+
+with pd.option_context('display.max_rows', 100):
+    print(top_cuisines)
+    print(bottom_cuisines)
+# -
+
+# Some of the cuisines are definitely 
+# If cuisine type is the effect, then this could indicate a concerning bias in the inspections. If it is the cause, then it would just mean there are (potentially systemic) reasons for these particular cuisine types to be less likely to pass inspections.
+
+# #### What about the other features?
+
+# +
+other_vars = (set(feature_vars) - set(initial_inspections_boro_vars) - set(('has_critical_flag', ))
+              - set(initial_inspections_cuisine_vars) - set(initial_inspections_violation_code_vars))
+
+g = sns.barplot(x='odds_ratio', y='feature',
+                data=final_coefficients[final_coefficients['feature'].isin(
+                    other_vars)].sort_values('odds_ratio', ascending=True))
+g.set(xlabel='Odds ratio', ylabel='Feature')
+g.axvline(1.0)
+plt.tight_layout()
+plt.show()
+
+inspections['CRITICAL FLAG'].value_counts(dropna=False)
+with pd.option_context('display.max_rows', 100):
+    print(inspections.loc[(inspections['CRITICAL FLAG'] == 'Y'), ['VIOLATION DESCRIPTION', 'ACTION']].head(100))
+# -
+
+# It looks like something is wrong with 'has_critical_flag' because way too many inspections have this. This is true of the original 'CRITICAL FLAG' variable as well, and the values don't match what's in the DD, so I'm concerned about it.
 
 
 
@@ -546,6 +751,8 @@ for c, feature in zip(contributions[0],
 # - https://blog.datadive.net/random-forest-interpretation-with-scikit-learn/
 # - https://github.com/andosa/treeinterpreter
 
+# - https://stats.idre.ucla.edu/other/mult-pkg/faq/general/faq-how-do-i-interpret-odds-ratios-in-logistic-regression/
+# - https://stackoverflow.com/questions/39626401/how-to-get-odds-ratios-and-other-related-features-with-scikit-learn
 
 # +
 # -
