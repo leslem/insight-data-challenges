@@ -1,45 +1,50 @@
-# ---
-# jupyter:
-#   jupytext:
-#     cell_metadata_filter: -all
-#     formats: ipynb,py
-#     text_representation:
-#       extension: .py
-#       format_name: light
-#       format_version: '1.5'
-#       jupytext_version: 1.3.3
-#   kernelspec:
-#     display_name: Python 3
-#     language: python
-#     name: python3
-# ---
-
 # # Planning
 
 # ## Challenge
-# This is an open-ended challenge to basically come up with something interesting and useful (with a business case!) from the given dataset. Some suggestions include identifying trends or actionable insights, or providing recommendations. The audience could be restaurant customers, inspectors, or restauranteurs.
+# This is an open-ended challenge to find something interesting and useful (with a business case!) from a dataset of New York City's restaurant health inspections. The inspections are performed by the Department of Health and Mental Hygiene (DOHMH). Some suggestions include identifying trends or actionable insights, or providing recommendations. The audience could be restaurant customers, inspectors, or restauranteurs.
+# I came up with some questions I was interested in answering:
+# 1. What factors contribute to inspection failures?
+# 2. Is there any evidence of geographic bias in inspections?
+# 3. Is there any evidence of cuisine bias in inspections?
+# 4. Is there any evidence of inspection timing affecting results?
 
 # ## Approach
-# - Read data dictionary and accompanying documentation
-# - Read in and clean the data
-#     - Fill in missing grade where relevant
-# - Plot everything
-# - Add derived variables
-#     - Gradeable/non-gradeable inspection
-#     - Get month, year, day components of inspection date
-# - Aggregate data
-#    - By establishment
-#    - By borough
-
-# - Make a plan for what I will do
-# - What factors are most important for determining whether a business will fail inspection or not?
-# - What factors are most important for determining whether a business will be closed after inspection failure or not?
-# - Need to engineer many features here to get the data needed on failed inspections and business closures/nonclosures
-# - Use a random forest classifier to learn more about it
+# I cleaned, plotted, and examined the data. Documentation describing the inspection process suggested two possible outcome variables to look into: 1) initial inspection failure and 2) closure after reinspection. I wanted to investigate both, but started with initial inspection failure.
+# I investigated both logistic regression and random forest classification models. I chose to focus on the logistic regression results because I wanted to be able to interpret the coefficients and odds ratios. I tuned hyperparameters and evaluated the model using AUC ROC, because it is a good overall summary of model performance, considering all cells of the confusion matrix. A logistic regression model with L2 (ridge) regression and a penalty of 0.1 classifies initial inspection failures with an AUC of 0.932.
 
 # ## Results
 
+# ### 1. What factors contribute to inspection failures?
+
+# Looking at the odds ratios for each of the features in the logistic regression model, here are some of the most important factors affecting initial inspection failure.
+
+# - Features associated with lower odds of passing initial inspection:
+#     - Violation codes related to the presence of mice, rats, cockroaches, or flies
+#     - Violation codes related to lack of washing facilities, lack of food safety plan, improper food storage temperature, and lack of a required certificate
+#     - The borough Queens
+#     - Many kinds of cuisine, including Bangladeshi, Indian, Moroccan, Asian, Malaysian, Spanish, African, Turkish, Latin, Chinese, Mediterranean, Hawaiian, Egyptian, Thai, etc.
+#     - The number of violations cited
+
+# - Features associated with higher odds of passing initial inspection:
+#     - Violation codes with lower stakes issues, such as violation of a recently-introduced ban on styrofoam, improper lighting or ventilation, or reuse of single use items
+#     - The borough Staten Island
+#     - Many kinds of cuisine including ice cream, hot dogs, donuts, soups/sandwiches, hamburgers, Continental, cafe/coffee/tea shops, juices/smoothies, Ethiopian, steak, sandwiches, bakeries, bagel/pretzel shops, etc. Many of these seem to be shops that would have less food prep and smaller facilities to maintain, so they make sense.
+#     - Increasing day of the week
+
+# ### 2. Is there any evidence of geographic bias in inspections?
+# Yes, there is some evidence for Queens establishments having lower odds of passing the initial inspection and for Staten Island establishments having higher odds of passing. It's difficult to answer this question without a more sophisticated version of logistic regression to use.
+
+# ### 3. Is there any evidence of cuisine bias in inspections?
+# Yes, the cuisine types with the lowest odds of passing the initial inspection include many of the "ethnic" cuisines. Other information is needed to determine if this is a cause or an effect.
+
+# ### 4. Is there any evidence of inspection timing affecting results?
+# There might be a slight increase in odds of passing the initial inspection for inspections happening later in the week, but it was slight and of unknown significance. There is no evidence of any effect of the time of year (month) on the odds of passing inspection.
+
 # ## Takeaways
+# - Restauranteurs in Queens or those running establishments serving at-risk cuisines (e.g. Bangladeshi, Indian, Moroccan, Malaysian, etc.) should be extra vigilant before inspections.
+# - Restauranteurs should pay special attention to the violations most associated with lower odds of passing the inspection, such as presence of vermin, lack of washing facilities, improper food storage temperature, and lack of required certficiations or food safety plans.
+# - NYC food inspectors should carefully examine their inspection process to see if it is being affected by bias against certain cuisines.
+# - Aspiring restauranteurs could open an ice cream, hot dog, donut, soup & sandwich, or coffee & tea shop to start out with lower odds of failing the initial food saftey inspection.
 
 # +
 import matplotlib.pyplot as plt
@@ -50,15 +55,17 @@ import pickle
 import seaborn as sns
 
 from datetime import datetime
+from IPython.display import display
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import plot_confusion_matrix
+from sklearn.metrics import plot_confusion_matrix, plot_roc_curve
 from sklearn.model_selection import cross_validate, GridSearchCV, train_test_split, StratifiedKFold
 from sklearn.preprocessing import MultiLabelBinarizer, OneHotEncoder
-from treeinterpreter import treeinterpreter as ti, utils
+from treeinterpreter import treeinterpreter as ti
 
 
-sns.set_style("whitegrid")
+sns.set(style="whitegrid", font_scale=1.25)
+plt.figure(figsize=(12.8, 9.6), dpi=400)
 # -
 
 # +
@@ -74,10 +81,8 @@ inspections = pd.read_csv(
     parse_dates=['INSPECTION DATE', 'GRADE DATE', 'RECORD DATE']
 )
 
-print(inspections.info())
-
-with pd.option_context('display.max_columns', 100):
-    print(inspections.head(15))
+display(inspections.info())
+display(inspections.head(15))
 # -
 
 # ### Fix data types
@@ -91,7 +96,7 @@ variable_dtypes = inspections.dtypes.apply(lambda x: x.name)
 variable_info = pd.DataFrame({'n_categories': values_per_variable,
                               'dtype': variable_dtypes,
                               'variable': values_per_variable.index}).reset_index(drop=True)
-print(variable_info)
+display(variable_info)
 
 # Convert columns to categorical
 cat_threshold = 110  # If n unique values is below this, it's probably categorical
@@ -102,7 +107,7 @@ known_cat_cols = [
 
 variable_info['to_category'] = (variable_info['n_categories'] < cat_threshold)\
                                & (~variable_info['dtype'].isin(('datetime64[ns]', )))
-print(variable_info)
+display(variable_info)
 # Are there any known categorical variables missing? Or vice versa?
 set(variable_info['variable'].loc[variable_info['to_category']].to_list()) - set(known_cat_cols)
 set(known_cat_cols) - set(variable_info['variable'].loc[variable_info['to_category']].to_list())
@@ -110,15 +115,15 @@ set(known_cat_cols) - set(variable_info['variable'].loc[variable_info['to_catego
 for v in variable_info['variable'].loc[variable_info['to_category']]:
     inspections[v] = inspections[v].astype('category')
 
-print(inspections.info())
+display(inspections.info())
 variable_info['dtype'] = inspections.dtypes.apply(lambda x: x.name).to_numpy()
 # -
 
 # ### Convert zipcode to an int
 
 # +
-inspections['ZIPCODE'].describe()
-inspections['ZIPCODE'].isna().sum()  # 5500 NaN values, which is why it's not an int. Leave it for now.
+display(inspections['ZIPCODE'].describe())
+display(inspections['ZIPCODE'].isna().sum())  # 5500 NaN values, which is why it's not an int. Leave it for now.
 # -
 
 # ### Fix missing value codes
@@ -129,8 +134,7 @@ inspections['BORO'] = inspections['BORO'].replace('0', np.NaN)
 for v in inspections.select_dtypes(include='category').columns:
     print('_' * 20)
     print(v)
-    with pd.option_context('display.max_rows', cat_threshold):
-        print(inspections[v].value_counts(dropna=False))
+    display(inspections[v].value_counts(dropna=False))
 
 new_establishment_inspection_date = datetime(1900, 1, 1)
 inspections['INSPECTION DATE'] = inspections['INSPECTION DATE'].replace(new_establishment_inspection_date, pd.NaT)
@@ -138,11 +142,9 @@ inspections['INSPECTION DATE'] = inspections['INSPECTION DATE'].replace(new_esta
 for v in inspections.select_dtypes(include='datetime').columns:
     print('_' * 20)
     print(v)
-    with pd.option_context('display.max_rows', cat_threshold):
-        print(inspections[v].value_counts(dropna=False))
+    display(inspections[v].value_counts(dropna=False))
 
-with pd.option_context('display.max_columns', 100):
-    print(inspections.select_dtypes(include='number').describe())
+display(inspections.select_dtypes(include='number').describe())
 
 variable_info['n_missing'] = inspections.apply(lambda x: x.isna().sum()).to_numpy()
 # -
@@ -151,7 +153,7 @@ variable_info['n_missing'] = inspections.apply(lambda x: x.isna().sum()).to_nump
 
 # +
 # Check if there's more than one description per violation code, to see if it will work to select the first one
-print(
+display(
     inspections[['VIOLATION CODE', 'VIOLATION DESCRIPTION']].groupby(
         'VIOLATION CODE').aggregate('nunique')['VIOLATION DESCRIPTION'].value_counts()
 )
@@ -165,7 +167,7 @@ violation_descriptions = inspections[['VIOLATION CODE', 'VIOLATION DESCRIPTION']
     'VIOLATION CODE').aggregate('first')
 
 with pd.option_context('display.max_rows', 200):
-    print(violation_descriptions)
+    display(violation_descriptions)
 # -
 
 
@@ -195,7 +197,7 @@ inspections['is_gradeable'] = ((inspections['INSPECTION TYPE'].isin(gradeable_in
                                & (inspections['ACTION'].isin(gradeable_actions))
                                & (inspections['INSPECTION DATE'] >= gradeable_inspection_date_min)
                                )
-inspections['is_gradeable'].value_counts(dropna=False)
+display(inspections['is_gradeable'].value_counts(dropna=False))
 # -
 
 # ### Add variables for what kind of inspection it was
@@ -220,14 +222,14 @@ inspections['inspection_dayofyear'] = inspections['INSPECTION DATE'].dt.dayofyea
 inspections['inspection_dayofweek'] = inspections['INSPECTION DATE'].dt.dayofweek.astype('category')
 inspections['inspection_isweekday'] = inspections['inspection_dayofweek'].isin(range(5))
 inspections['inspection_week'] = inspections['INSPECTION DATE'].dt.week.astype('category')
-print(inspections.info())
+display(inspections.info())
 # -
 
 # ## Plot everything
 
 # +
 # Try the Pandas built in histogram function, even though it's mediocre
-inspections.select_dtypes(exclude='bool').hist()
+inspections.select_dtypes(exclude='bool').hist(figsize=(20, 15))
 plt.show()
 # And it fails on boolean columns!
 # -
@@ -238,7 +240,7 @@ plt.show()
 # +
 g = sns.FacetGrid(
     inspections.select_dtypes(include='number').melt(), col='variable', col_wrap=4,
-    sharex=False, sharey=False
+    sharex=False, sharey=False, height=4
 )
 g.map(plt.hist, 'value', color='steelblue', bins=20)
 plt.show()
@@ -264,7 +266,7 @@ for v in many_values_cat_vars:
     print('_' * 20)
     print(v)
     with pd.option_context('display.max_rows', cat_threshold):
-        print(inspections[v].value_counts(dropna=False))
+        display(inspections[v].value_counts(dropna=False))
 # -
 
 # A facet grid for those with fewer categories
@@ -291,12 +293,12 @@ for v in other_cat_vars:
     plt.show()
 # -
 
-# ### Scatter plot by index of the datetime variables
+# ### Histograms of the datetime variables
 
 # +
 g = sns.FacetGrid(
-    inspections.select_dtypes(include='datetime').melt(), col='variable', col_wrap=2,
-    sharex=False, sharey=False
+    inspections.select_dtypes(include='datetime').melt(), col='variable', col_wrap=3,
+    sharex=False, sharey=False, height=4
 )
 g.map(plt.hist, 'value', color='steelblue', bins=20)
 plt.show()
@@ -308,8 +310,8 @@ plt.show()
 for v in inspections.select_dtypes(include='object').columns:
     print('_' * 20)
     print(v)
-    print(inspections[v].head(15))
-    print(inspections[v].tail(15))
+    display(inspections[v].head(15))
+    display(inspections[v].tail(15))
 # -
 
 # ## Filter to most important core inspection types
@@ -332,11 +334,11 @@ business_summary = core_inspections.groupby('CAMIS').aggregate(
     avg_inspection_frequency=('INSPECTION DATE', lambda x: np.mean(np.diff(x.unique())).astype('timedelta64[D]'))
 )
 business_summary['avg_inspection_frequency'] = business_summary['avg_inspection_frequency'].dt.days
-business_summary.info()
+display(business_summary.info())
 
 g = sns.FacetGrid(
     business_summary.melt(), col='variable',
-    sharex=False, sharey=False
+    sharex=False, sharey=False, height=4
 )
 g.map(plt.hist, 'value', color='steelblue', bins=20)
 plt.show()
@@ -391,7 +393,7 @@ initial_inspections_cuisine_vars = 'cuisine_' + ohe.categories_[0]
 cuisine_encoding = pd.DataFrame(cuisine_encoding, columns=initial_inspections_cuisine_vars)
 initial_inspections = pd.concat([initial_inspections, cuisine_encoding], axis=1)
 
-print(initial_inspections.info(max_cols=500))
+display(initial_inspections.info(max_cols=500))
 # -
 
 
@@ -437,7 +439,7 @@ reinspections_cuisine_vars = 'cuisine_' + ohe.categories_[0]
 cuisine_encoding = pd.DataFrame(cuisine_encoding, columns=reinspections_cuisine_vars)
 reinspections = pd.concat([reinspections, cuisine_encoding], axis=1)
 
-reinspections.info(max_cols=500)
+display(reinspections.info(max_cols=500))
 # -
 
 # ## Find important features for classification of failed initial inspections using RandomForest
@@ -449,7 +451,7 @@ reinspections.info(max_cols=500)
 # +
 initial_inspections_variances = initial_inspections.var(axis=0)
 with pd.option_context('display.max_rows', 200):
-    print(initial_inspections_variances.sort_values())
+    display(initial_inspections_variances.sort_values())
 
 g = sns.distplot(initial_inspections_variances, rug=False)
 plt.show()
@@ -473,8 +475,8 @@ forest = RandomForestClassifier(n_estimators=20, class_weight='balanced', oob_sc
 forest.fit(X_train, y_train)
 forest.predict(X_test)
 forest.score(X_test, y_test)
-forest.feature_importances_
-forest.oob_score_
+print(forest.feature_importances_)
+print(forest.oob_score_)
 # g = sns.barplot(x=forest.feature_importances_, y=feature_vars)
 # plt.show()
 # -
@@ -492,7 +494,7 @@ cv_results = cross_validate(forest, X, y,
                             scoring=chosen_metrics
                             )
 cv_means = {k: np.mean(v) for k, v in cv_results.items()}
-print(cv_means)
+display(cv_means)
 
 # n_estimators_grid = np.concatenate((np.arange(25, 175, 25), np.arange(200, 600, 100)))
 # n_estimators_grid = np.arange(25, 175, 25)
@@ -518,11 +520,17 @@ final_forest.feature_importances_
 final_feature_importances = pd.DataFrame({'feature': feature_vars, 'importance': final_forest.feature_importances_})
 final_feature_importances = final_feature_importances.sort_values('importance', ascending=False)
 
+plt.figure(figsize=(6, 10), dpi=400)
 g = sns.barplot(x='importance', y='feature', data=final_feature_importances.head(40))
 plt.tight_layout()
 plt.show()
 
+plt.figure(figsize=(12.8, 9.6), dpi=400)
 plot_confusion_matrix(final_forest, X_test, y_test, values_format=',.0f')
+plt.show()
+
+plot_roc_curve(final_forest, X_test, y_test)
+plt.plot([0, 1], [0, 1], 'k-', color='r', label='Chance', linestyle='--')
 plt.show()
 # -
 
@@ -548,7 +556,7 @@ for c, feature in zip(contributions[0], feature_vars):
 logreg = LogisticRegression(random_state=48, max_iter=1000, solver='saga')
 logreg.fit(X_train, y_train)
 logreg.predict(X_test)
-logreg.score(X_test, y_test)
+print(logreg.score(X_test, y_test))
 # -
 
 
@@ -562,7 +570,8 @@ cv_results = cross_validate(logreg, X, y,
                             scoring=chosen_metrics
                             )
 cv_means = {k: np.mean(v) for k, v in cv_results.items()}
-print(cv_means)
+display(cv_means)
+# -
 
 # ### Grid search to tune over regularization hyperparameters
 
@@ -575,11 +584,10 @@ param_grid = {
     # L2 = penalized by squared magnitude of coefficient
 }
 
-# The higher the value of C, the longer the fit takes and the higher the max_iter needed.
-
-# Use saga solver because it is faster for large data and supports both L1 and L2 regularization
 logreg_gridsearch_outfile = os.path.join(os.path.expanduser(output_dir), 'logreg_gridsearch_results.pickle')
 
+# The higher the value of C, the longer the fit takes and the higher the max_iter needed.
+# Use saga solver because it is faster for large data and supports both L1 and L2 regularization
 if not os.path.exists(logreg_gridsearch_outfile):
     classifier_grid_search = GridSearchCV(
         estimator=LogisticRegression(solver='saga', random_state=48, max_iter=5000),
@@ -597,32 +605,43 @@ grid_search_results = pd.DataFrame(grid_search_models.cv_results_)
 grid_search_results['params_string'] = grid_search_results['params'].apply(
     lambda x: 'C={:.3f}\nPenalty={}'.format(x['C'], x['penalty']))
 grid_search_results = grid_search_results.sort_values(by='rank_test_score', ascending=True)
-with pd.option_context('display.max_columns', 50):
-    print(grid_search_results)
+display(grid_search_results)
 
+plt.figure(figsize=(8, 8), dpi=400)
 g = sns.barplot(x='mean_test_score', y='params_string', data=grid_search_results)
 g.set(xlabel='Mean AUC ROC', ylabel='Hyperparameter values')
 plt.tight_layout()
 plt.show()
+plt.figure(figsize=(12.8, 9.6), dpi=400)
 # -
 
 # L1 and L2 regularization are bascially both good. And any C higher than 0.1 is good.
-# I choose C = 0.1 and penalty = l2 because they're fastest of the ones with good AUC ROC.
+# I chose C = 0.1 and penalty = l2 because they're fastest of the ones with good AUC ROC.
 
 # ### Fit the final logistic regression model
 
 # +
 final_C = 0.1
-final_penalty = 'l1'
+final_penalty = 'l2'
 final_logreg = LogisticRegression(random_state=48, max_iter=5000, C=final_C, penalty=final_penalty, solver='saga')
 final_logreg.fit(X_train, y_train)
 final_logreg_predictions = final_logreg.predict(X_test)
 
 plot_confusion_matrix(final_logreg, X_test, y_test, values_format=',.0f')
 plt.show()
+
+plot_roc_curve(final_logreg, X_test, y_test)
+plt.plot([0, 1], [0, 1], 'k-', color='r', label='Chance', linestyle='--')
+plt.show()
 # -
 
 # ### Gather coefficients & odds ratios
+
+# coef_ gives the coefficients contributing to classes_[1], which is "True" for passing the initial inspection.
+
+# So coefficients quantify contribution to probability of passing initial inspection.
+
+# Odds ratios greater than 1.0 indicating a higher probability of passing the initial inspection and ORs less than 1.0 indicate a lower probability of passing the initial inspection.
 
 # +
 final_coefficients = pd.DataFrame({'feature': feature_vars, 'coefficient': final_logreg.coef_[0]})
@@ -632,13 +651,10 @@ final_coefficients['direction'] = np.sign(final_coefficients['coefficient'])
 final_coefficients['direction'] = final_coefficients['direction'].replace({-1.0: 'negative', 1.0: 'positive', 0: 'NA'})
 final_coefficients = final_coefficients.sort_values('magnitude', ascending=False)
 final_coefficients['odds_ratio'] = np.exp(final_coefficients['coefficient'])
-# "The odds ratio is defined as the ratio of the odds of A in the presence of B and the odds of A in the absence of B,
-# or equivalently (due to symmetry), the ratio of the odds of B in the presence of A and the odds of B in the
-# absence of A."
-# Here it is the odds of passing the initial inspection in the presence of the feature.
+# The odds ratio is the ratio of the odds of passing inspection to the odds of failing inspection. For a given feature, it is the OR when other features are held constant.
 
 with pd.option_context('display.max_rows', 200):
-    print(final_coefficients)
+    display(final_coefficients.sort_values('odds_ratio', ascending=False))
 
 # g = sns.barplot(x='magnitude', y='feature', hue='direction', data=final_coefficients.head(40))
 # g.set(xlabel='Coefficient magnitude', ylabel='Feature')
@@ -651,9 +667,11 @@ with pd.option_context('display.max_rows', 200):
 # #### What are odds ratios for the various violation codes?
 
 # +
+plt.figure(figsize=(9, 12), dpi=400)
 g = sns.barplot(x='odds_ratio', y='feature', hue='direction',
                 data=final_coefficients[final_coefficients['feature'].isin(
                     initial_inspections_violation_code_vars)].sort_values('odds_ratio', ascending=True))
+g.axvline(1.0)
 g.set(xlabel='Odds ratio', ylabel='Feature')
 plt.tight_layout()
 plt.show()
@@ -666,19 +684,29 @@ bottom_violation_codes = final_coefficients.loc[final_coefficients['feature'].is
     initial_inspections_violation_code_vars),
 ].sort_values('odds_ratio', ascending=True).head(10)['feature'].str.replace('violation_', '')
 
-with pd.option_context('display.max_rows', 100):
-    print(violation_descriptions.loc[violation_descriptions.index.isin(top_violation_codes), ])
-    print(violation_descriptions.loc[violation_descriptions.index.isin(bottom_violation_codes), ])
+with pd.option_context('display.max_colwidth', 150):
+    print('HIGHEST ODDS RATIO VIOLATION CODES - higher odds of passing initial inspection')
+    display(violation_descriptions.loc[violation_descriptions.index.isin(top_violation_codes), ])
+    print('LOWEST ODDS RATIO VIOLATION CODES - lower odds of passing initial inspection')
+    display(violation_descriptions.loc[violation_descriptions.index.isin(bottom_violation_codes), ])
 # -
 
+# Investigating the violation code 22G with a missing description:
+
 # https://rules.cityofnewyork.us/tags/sanitary-inspection
+
 # "In the list of unscored violations, a new violation code 22G containing a penalty for violations of Administrative Code §16-329 (c) which prohibits use of expanded polystyrene single service articles, is being added.   "
 # https://www1.nyc.gov/office-of-the-mayor/news/295-18/mayor-de-blasio-ban-single-use-styrofoam-products-new-york-city-will-be-effect
 # From a recent ban on styrofoam products!
 
+# What is an HACCP plan? 
+
+# "Hazard Analysis Critical Control Points (HACCP) is an internationally recognized method of identifying and managing food safety related risk and, when central to an active food safety program, can provide your customers, the public, and regulatory agencies assurance that a food safety program is well managed." (Source)[https://safefoodalliance.com/food-safety-resources/haccp-overview/]
+
 # #### What are odds ratios for the boroughs?
 
 # +
+plt.figure(figsize=(8, 4), dpi=400)
 g = sns.barplot(x='odds_ratio', y='feature',
                 data=final_coefficients[final_coefficients['feature'].isin(
                     initial_inspections_boro_vars)].sort_values('odds_ratio', ascending=True))
@@ -688,14 +716,16 @@ plt.tight_layout()
 plt.show()
 # -
 
-# The boroughs are all pretty close to having the same odds of failing initial inspection.
+# The boroughs are all pretty close to having the same odds of passing initial inspection, though Queens and Staten Island are perhaps a bit different. It's hard to say without p values for the coefficients, which I would need to use a different package or do bootstrapping for.
 
 # #### What are odds ratios for the various cuisines?
 
 # +
+plt.figure(figsize=(10, 13), dpi=400)
 g = sns.barplot(x='odds_ratio', y='feature', hue='direction',
                 data=final_coefficients[final_coefficients['feature'].isin(
                     initial_inspections_cuisine_vars)].sort_values('odds_ratio', ascending=True))
+g.axvline(1.0)
 g.set(xlabel='Odds ratio', ylabel='Feature')
 plt.tight_layout()
 plt.show()
@@ -709,12 +739,16 @@ bottom_cuisines = final_coefficients.loc[
 ].sort_values('odds_ratio', ascending=True)
 
 with pd.option_context('display.max_rows', 100):
-    print(top_cuisines)
-    print(bottom_cuisines)
+    print('HIGHEST ODDS RATIO CUISINES')
+    display(top_cuisines)
+    print('LOWEST ODDS RATIO CUISINES')
+    display(bottom_cuisines)
 # -
 
-# Some of the cuisines are definitely 
+# Just by eye, it does appear that many of the "ethnic" food categories are in the lower OR range.
 # If cuisine type is the effect, then this could indicate a concerning bias in the inspections. If it is the cause, then it would just mean there are (potentially systemic) reasons for these particular cuisine types to be less likely to pass inspections.
+
+# All of the high OR cuisines make a lot of sense, like ice cream shops, donut shops, cafes, etc. where there is less food prep and less equipment and facilities to maintain.
 
 # #### What about the other features?
 
@@ -722,21 +756,22 @@ with pd.option_context('display.max_rows', 100):
 other_vars = (set(feature_vars) - set(initial_inspections_boro_vars) - set(('has_critical_flag', ))
               - set(initial_inspections_cuisine_vars) - set(initial_inspections_violation_code_vars))
 
+plt.figure(figsize=(8, 4), dpi=400)
 g = sns.barplot(x='odds_ratio', y='feature',
                 data=final_coefficients[final_coefficients['feature'].isin(
                     other_vars)].sort_values('odds_ratio', ascending=True))
-g.set(xlabel='Odds ratio', ylabel='Feature')
 g.axvline(1.0)
+g.set(xlabel='Odds ratio', ylabel='Feature')
 plt.tight_layout()
 plt.show()
 
 inspections['CRITICAL FLAG'].value_counts(dropna=False)
 with pd.option_context('display.max_rows', 100):
-    print(inspections.loc[(inspections['CRITICAL FLAG'] == 'Y'), ['VIOLATION DESCRIPTION', 'ACTION']].head(100))
+    display(inspections.loc[(inspections['CRITICAL FLAG'] == 'Y'), ['VIOLATION DESCRIPTION', 'ACTION']].head(100))
 # -
 
 # It looks like something is wrong with 'has_critical_flag' because way too many inspections have this. This is true of the original 'CRITICAL FLAG' variable as well, and the values don't match what's in the DD, so I'm concerned about it.
-
+# It's also concerning that `has_critical_flag` appears to be associated with higher odds of **passing** the initial inspection, by quite a bit (OR=7.3).
 
 
 # References:
@@ -753,6 +788,9 @@ with pd.option_context('display.max_rows', 100):
 
 # - https://stats.idre.ucla.edu/other/mult-pkg/faq/general/faq-how-do-i-interpret-odds-ratios-in-logistic-regression/
 # - https://stackoverflow.com/questions/39626401/how-to-get-odds-ratios-and-other-related-features-with-scikit-learn
+
+
+
 
 # +
 # -
