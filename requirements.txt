@@ -1,8 +1,11 @@
+gensim
 jupyter
 jupytext
 matplotlib
+nltk
 pandas
 plotly
+pyLDAvis
 scikit-learn
 seaborn
 statsmodels
